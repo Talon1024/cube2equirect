@@ -1,4 +1,5 @@
 #include "cube2equirect.h"
+#include "glad.h"
 
 using namespace std;
 
@@ -10,7 +11,7 @@ cube2equirect::cube2equirect(SDL_Window *win, string exe) {
     sprintf(frameIdx, "%06d", frameCount);
 }
 
-void cube2equirect::initGL(string inDir, string outDir, int outRes, string outFmt) {
+bool cube2equirect::initGL(string inDir, string outDir, int outRes, string outFmt) {
     SDL_GL_SetSwapInterval(1);
 
     cubemapDir = inDir;
@@ -26,10 +27,13 @@ void cube2equirect::initGL(string inDir, string outDir, int outRes, string outFm
 
     glViewport(0, 0, equirectW, equirectH);
 
-    initShaders("cube2equirect");
+    if (!initShaders("cube2equirect")) {
+        return false;
+    }
     initBuffers();
     initRenderToTexture();
     initCubeTextures();
+    return true;
 }
 
 void cube2equirect::render() {
@@ -71,7 +75,6 @@ void cube2equirect::render() {
     glBindVertexArray(vertexArrayObject);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
 
-
     // read rendered image into pixel buffer
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glBindTexture(GL_TEXTURE_2D, equirectTexture);
@@ -84,10 +87,11 @@ void cube2equirect::render() {
     else
         saveImagePNG(equirectDir + "equirect_" + frameIdx + ".png", equirectPixels, equirectW, equirectH);
 
-
     frameCount++;
     sprintf(frameIdx, "%06d", frameCount);
     SDL_GL_SwapWindow(mainwindow);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 bool cube2equirect::hasMoreFrames() {
@@ -140,6 +144,8 @@ void cube2equirect::initBuffers() {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6 * sizeof(GLushort), vertexIndices, GL_STATIC_DRAW);
 
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
 void cube2equirect::initRenderToTexture() {
@@ -187,28 +193,51 @@ void cube2equirect::initCubeTextures() {
     loadImage(cubemapDir + "000000_front."  + imgExt, cubeTextures[5], true);
 }
 
-void cube2equirect::updateCubeTextures() {
-    loadImage(cubemapDir + frameIdx + "_left."   + imgExt, cubeTextures[0], false);
-    loadImage(cubemapDir + frameIdx + "_right."  + imgExt, cubeTextures[1], false);
-    loadImage(cubemapDir + frameIdx + "_bottom." + imgExt, cubeTextures[2], false);
-    loadImage(cubemapDir + frameIdx + "_top."    + imgExt, cubeTextures[3], false);
-    loadImage(cubemapDir + frameIdx + "_back."   + imgExt, cubeTextures[4], false);
-    loadImage(cubemapDir + frameIdx + "_front."  + imgExt, cubeTextures[5], false);
+void cube2equirect::deinitGL() {
+    glDeleteProgram(shaderProgram);
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+    glDeleteVertexArrays(1, &vertexArrayObject);
+    glDeleteBuffers(1, &vertexPositionBuffer);
+    glDeleteBuffers(1, &vertexTextureBuffer);
+    glDeleteBuffers(1, &vertexIndexBuffer);
+    glDeleteFramebuffers(1, &equirectFramebuffer);
+    glDeleteTextures(6, cubeTextures);
+    glDeleteTextures(1, &equirectTexture);
+    free(equirectPixels);
 }
 
-void cube2equirect::initShaders(std::string name) {
+void cube2equirect::updateCubeTextures() {
+    glDeleteTextures(6, cubeTextures); // Attempt to fix memory leak
+    glGenTextures(6, cubeTextures);
+    loadImage(cubemapDir + frameIdx + "_left."   + imgExt, cubeTextures[0], true);
+    loadImage(cubemapDir + frameIdx + "_right."  + imgExt, cubeTextures[1], true);
+    loadImage(cubemapDir + frameIdx + "_bottom." + imgExt, cubeTextures[2], true);
+    loadImage(cubemapDir + frameIdx + "_top."    + imgExt, cubeTextures[3], true);
+    loadImage(cubemapDir + frameIdx + "_back."   + imgExt, cubeTextures[4], true);
+    loadImage(cubemapDir + frameIdx + "_front."  + imgExt, cubeTextures[5], true);
+}
+
+bool cube2equirect::initShaders(std::string name) {
     string vertSource = readFile(exePath + "shaders/" + name + ".vert");
-    GLint vertexShader = compileShader(vertSource, GL_VERTEX_SHADER);
+    if (vertSource.empty()) {
+        return false;
+    }
+    vertexShader = compileShader(vertSource, GL_VERTEX_SHADER);
 
     string fragSource = readFile(exePath + "shaders/" + name + ".frag");
-    GLint fragmentShader = compileShader(fragSource, GL_FRAGMENT_SHADER);
-    
+    if (fragSource.empty()) {
+        return false;
+    }
+    fragmentShader = compileShader(fragSource, GL_FRAGMENT_SHADER);
+
     createShaderProgram(name, vertexShader, fragmentShader);
+    return true;
 }
 
-GLint cube2equirect::compileShader(string source, GLint type) {
+GLuint cube2equirect::compileShader(string source, GLint type) {
     GLint status;
-    GLint shader = glCreateShader(type);
+    GLuint shader = glCreateShader(type);
 
     const char *srcBytes = source.c_str();
     int srcLength = source.length();
@@ -265,17 +294,21 @@ void cube2equirect::createShaderProgram(string name, GLint vertexShader, GLint f
 }
 
 string cube2equirect::readFile(string filename) {
+    struct stat info;
+    if (stat(filename.c_str(), &info) == -1) {
+        return string();
+    }
+    long fsize = info.st_size;
+
     FILE *f = fopen(filename.c_str(), "rb");
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
     char *text = (char*)malloc(fsize);
-    fread(text, fsize, 1, f);
+    fread(text, 1, fsize, f);
     fclose(f);
 
-    return string(text, fsize);
+    string fileContents(text, fsize);
+    free(text);
+    return fileContents;
 }
 
 void cube2equirect::loadImage(string filename, GLuint texture, bool firstTime) {
@@ -296,8 +329,9 @@ void cube2equirect::loadImage(string filename, GLuint texture, bool firstTime) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, surface->w, surface->h, 0, format, GL_UNSIGNED_BYTE, surface->pixels);
-    
+
     glBindTexture(GL_TEXTURE_2D, 0);
 
     SDL_FreeSurface(surface);
@@ -311,11 +345,11 @@ bool cube2equirect::saveImageJPEG(string filename, GLubyte *pixels, int width, i
 
     struct jpeg_compress_struct cinfo;
     struct jpeg_error_mgr jerr;
-     
+
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
     jpeg_stdio_dest(&cinfo, fp);
-     
+
     cinfo.image_width      = width;
     cinfo.image_height     = height;
     cinfo.input_components = 3;
@@ -331,7 +365,7 @@ bool cube2equirect::saveImageJPEG(string filename, GLubyte *pixels, int width, i
         jpeg_write_scanlines(&cinfo, &row_pointer, 1);
     }
     jpeg_finish_compress(&cinfo);
-    
+
     fclose(fp);
     return true;
 }
@@ -355,6 +389,7 @@ bool cube2equirect::saveImagePNG(string filename, GLubyte *pixels, int width, in
 
     png_init_io(png, fp);
     png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
+    /*
     png_colorp palette = (png_colorp)png_malloc(png, PNG_MAX_PALETTE_LENGTH * sizeof(png_color));
     if (!palette) {
         fclose(fp);
@@ -362,6 +397,7 @@ bool cube2equirect::saveImagePNG(string filename, GLubyte *pixels, int width, in
         return false;
     }
     png_set_PLTE(png, info, palette, PNG_MAX_PALETTE_LENGTH);
+    */
     png_write_info(png, info);
     png_set_packing(png);
 
@@ -372,7 +408,7 @@ bool cube2equirect::saveImagePNG(string filename, GLubyte *pixels, int width, in
 
     png_write_image(png, rows);
     png_write_end(png, info);
-    png_free(png, palette);
+    //png_free(png, palette);
     png_destroy_write_struct(&png, &info);
 
     fclose(fp);

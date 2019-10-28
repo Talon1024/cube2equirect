@@ -6,16 +6,7 @@
 #include <SDL_image.h>
 #include <jpeglib.h>
 #include <png.h>
-
-#ifdef __APPLE__
-    #include <OpenGL/gl3.h>
-#else
-    #include <GL3/gl3.h>
-#endif
-
-#ifndef GL3_PROTOTYPES
-#define GL3_PROTOTYPES 1
-#endif
+#include "glad.h"
 
 class cube2equirect {
 private:
@@ -31,6 +22,8 @@ private:
 
     GLuint cubeTextures[6];
 
+    GLuint vertexShader;
+    GLuint fragmentShader;
     GLuint shaderProgram;
     GLint vertexPositionAttribute;
     GLint vertexTextureAttribute;
@@ -56,15 +49,16 @@ private:
 
 public:
     cube2equirect(SDL_Window *win, std::string exe);
-    void initGL(std::string inDir, std::string outDir, int outRes, std::string outFmt);
+    bool initGL(std::string inDir, std::string outDir, int outRes, std::string outFmt);
     void render();
     bool hasMoreFrames();
     void initBuffers();
     void initRenderToTexture();
     void initCubeTextures();
+    void deinitGL();
     void updateCubeTextures();
-    void initShaders(std::string name);
-    GLint compileShader(std::string source, GLint type);
+    bool initShaders(std::string name);
+    GLuint compileShader(std::string source, GLint type);
     void createShaderProgram(std::string name, GLint vertexShader, GLint fragmentShader);
     std::string readFile(std::string filename);
     void loadImage(std::string filename, GLuint texture, bool firstTime);

@@ -5,6 +5,7 @@
 #include <SDL.h>
 
 #include "cube2equirect.h"
+#include "glad.h"
 
 #define PROGRAM_NAME "Cube2Equirect"
 
@@ -13,7 +14,7 @@ using namespace std;
 
 SDL_Window *mainwindow;         // Window handle
 SDL_GLContext maincontext;      // OpenGL context handle
-cube2equirect *renderer;        // Renderer
+cube2equirect *converter;        // Renderer
 string cubeDataDir;             // Input data directory
 string equirectDataDir;         // Output data directory
 int hResolution;                // Output horizontal resolution
@@ -36,7 +37,7 @@ int main(int argc, char **argv) {
         printf("\n");
         printf("    -i, --input <DIRECTORY>      directory with cubemap image set sequence\n");
         printf("    -o, --output <DIRECTORY>     directory to save equirectangular images [Default: \'output/\']\n");
-        printf("    -h, --h-resolution <NUMBER>  horizontal resolution of output images [Default: 3840]\n");
+        printf("    -h, --h-resolution <NUMBER>  horizontal resolution of output images [Default: 4096]\n");
         printf("    -f, --format <IMG_FORMAT>    output image format (\'jpg\', \'png\', or \'mp4\') [Default: same as input]\n");
         printf("    -r, --framerate <NUMBER>     number of images per second (for video output) [Default: 24]\n");
         printf("\n");
@@ -55,7 +56,6 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-
     // Initialize SDL's video subsystem (or die on error)
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
         SDL_Die("Unable to initialize SDL");
@@ -71,12 +71,29 @@ int main(int argc, char **argv) {
     // Declare minimum OpenGL version - 3.2
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE); 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3); 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 
     // Create our window centered at initial resolution
     mainwindow = SDL_CreateWindow(PROGRAM_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 256, 128, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!mainwindow)
         SDL_Die("Unable to create window");
+
+    SDL_Renderer* renderer = SDL_CreateRenderer(mainwindow, -1, SDL_RENDERER_ACCELERATED);
+    if (!renderer)
+    {
+        dprintf(2, "Failed to create SDL renderer");
+        SDL_DestroyWindow(mainwindow);
+        SDL_Quit();
+    }
+
+    // Initialize OpenGL with GLAD
+    if (!gladLoadGLLoader(SDL_GL_GetProcAddress)) {
+        dprintf(2, "Failed to initialize GLAD");
+        SDL_DestroyWindow(mainwindow);
+        SDL_DestroyRenderer(renderer);
+        SDL_Quit();
+        return 1;
+    }
 
     maincontext = SDL_GL_CreateContext(mainwindow);
 
@@ -86,13 +103,19 @@ int main(int argc, char **argv) {
 
     string imgFormat = outFormat == "mp4" ? "jpg" : outFormat;
 
-    renderer = new cube2equirect(mainwindow, exePath);
-    renderer->initGL(cubeDataDir, equirectDataDir, hResolution, imgFormat);
-    renderer->render();
+    converter = new cube2equirect(mainwindow, exePath);
+    if (!converter->initGL(cubeDataDir, equirectDataDir, hResolution, imgFormat)) {
+        SDL_Die("Failed to initialize renderer");
+    }
+    converter->render();
     idle();
 
     SDL_MainLoop();
-    //SDL_Quit();
+    printf("Cleaning up...\n");
+    SDL_DestroyWindow(mainwindow);
+    SDL_DestroyRenderer(renderer);
+    SDL_GL_DeleteContext(maincontext);
+    SDL_Quit();
 
     return 0;
 }
@@ -100,7 +123,7 @@ int main(int argc, char **argv) {
 void parseArguments(int argc, char **argv, string *exe, string *inputDir, string *outputDir, int *resolution, string *format, int *framerate) {
     *exe = getExecutablePath(argv[0]);
     *outputDir = *exe + "output/";
-    *resolution = 3840;
+    *resolution = 4096;
     *format = "";
     *framerate = 24;
     bool hasInput = false;
@@ -257,40 +280,36 @@ void finishAndQuit() {
             } while (remove(imgFile) == 0);
         }
     }
-
-    SDL_Quit();
-    exit(0);
 }
 
 void SDL_Die(const char *msg) {
-    printf("%s: %s\n", msg, SDL_GetError());
+    // 2 = standard error
+    dprintf(2, "%s: %s\n", msg, SDL_GetError());
     SDL_Quit();
     exit(1);
 }
 
 void SDL_MainLoop() {
     SDL_Event event;
-    while (true) {
+    //while (true) {
         SDL_WaitEvent(&event);
         do {
             switch (event.type) {
                 case SDL_USEREVENT:
-                    if (renderer->hasMoreFrames()) {
-                        renderer->updateCubeTextures();
-                        renderer->render();
+                    if (converter->hasMoreFrames()) {
+                        converter->updateCubeTextures();
+                        converter->render();
                         idle();
                     }
                     else {
+                        printf("Cleaning up converter...\n");
+                        converter->deinitGL();
                         finishAndQuit();
                     }
-                    break;
-                case SDL_QUIT:
-                    SDL_Quit();
-                    exit(0);
                     break;
                 default:
                     break;
             }
         } while (SDL_PollEvent(&event));
-    }
+    //}
 }
